@@ -15,7 +15,7 @@ class SettingsWindow(tk.Toplevel):
     """
     A Toplevel window for displaying and editing application settings.
     """
-    def __init__(self, parent, winners_manager: 'WinnersManager'):
+    def __init__(self, parent, winners_manager: 'WinnersManager', ui_call: callable):
         super().__init__(parent)
         self.title("Settings")
         self.geometry("800x600")
@@ -23,6 +23,7 @@ class SettingsWindow(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
 
+        self.ui_call = ui_call
         self.winners_manager = winners_manager
         self.settings = settings_manager.settings
         self.vars = {}
@@ -156,7 +157,7 @@ class SettingsWindow(tk.Toplevel):
 
         def _task():
             result = update_yt_dlp()
-            self.after(0, lambda: self._on_update_complete(result))
+            self.ui_call(self._on_update_complete, result)
 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -215,10 +216,13 @@ class SettingsWindow(tk.Toplevel):
             else:
                 last_check_str = "Never"
 
-            self.after(0, lambda: self.yt_dlp_version_label.config(text=f"Installed yt-dlp version: {version}"))
-            self.after(0, lambda: self.yt_dlp_last_check_label.config(text=f"Last update check: {last_check_str}"))
-            if version != "Not found":
-                settings_manager.set('yt_dlp_current_version', version)
+            def _update_labels():
+                self.yt_dlp_version_label.config(text=f"Installed yt-dlp version: {version}")
+                self.yt_dlp_last_check_label.config(text=f"Last update check: {last_check_str}")
+                if version != "Not found":
+                    settings_manager.set('yt_dlp_current_version', version)
+
+            self.ui_call(_update_labels)
 
         threading.Thread(target=_task, daemon=True).start()
 

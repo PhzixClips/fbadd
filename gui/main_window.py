@@ -105,6 +105,18 @@ class MainWindow:
         self.facebook_cookies_path_var = None
 
 
+    def ui_call(self, func: Callable, *args, **kwargs):
+        """
+        Schedule a callable on the Tk UI thread ASAP.
+        Safe to call from worker threads.
+        """
+        try:
+            if self.ui and self.ui.winfo_exists():
+                self.ui.after(0, lambda: func(*args, **kwargs))
+        except Exception as e:
+            # Use f-string as our logger expects a single string.
+            self.logger.error(f"ui_call failure: {e}")
+
     # -----------------------------
     # App lifecycle
     # -----------------------------
@@ -114,6 +126,7 @@ class MainWindow:
 
     def _create_gui(self):
         self.root = tk.Tk()
+        self.ui = self.root  # Expose root widget for safe UI calls
         self.root.title('YouTube Clip Agent - Modular Edition')
         self.root.geometry(WINDOW_GEOMETRY)
 
@@ -436,7 +449,7 @@ class MainWindow:
 
     def _open_settings(self):
         """Opens the settings window and applies changes upon closing."""
-        settings_win = SettingsWindow(self.root, self.winners_manager)
+        settings_win = SettingsWindow(self.root, self.winners_manager, self.ui_call)
         self.root.wait_window(settings_win)
         # A restart is still recommended for theme changes to be perfect
         messagebox.showinfo("Settings Updated", "Live settings applied. A restart is recommended for all changes to take full effect.", parent=self.root)
@@ -1095,7 +1108,7 @@ class MainWindow:
         use_webview = settings_manager.get('preview_in_webview', True)
 
         if use_webview:
-            PreviewWindow(self.root, url, title)
+            PreviewWindow(self.root, url, title, self.ui_call)
         else:
             self._open_url_in_browser(url)
 
@@ -1204,10 +1217,10 @@ class MainWindow:
         def _task():
             try:
                 success = download_func(**kwargs)
-                self.root.after(0, lambda: on_complete(success))
+                self.ui_call(on_complete, success)
             except Exception as e:
                 self.logger.error(f"Exception during download execution for '{title}': {e}")
-                self.root.after(0, lambda: on_complete(False))
+                self.ui_call(on_complete, False)
 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -1381,7 +1394,7 @@ class MainWindow:
                 self.logger.info(f"Successfully transcribed {video_id}")
 
                 if callback:
-                    self.root.after(0, callback)
+                    self.ui_call(callback)
             except Exception as e:
                 self.logger.error(f"Async transcription failed for {video_id}: {e}")
 
@@ -1559,7 +1572,8 @@ class FacebookAnalysisTask:
         result = self._try_extraction(self.original_url)
 
         if result.success:
-            self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+            self.logger.debug("FB analysis completed in worker; dispatching to UI thread")
+            self.main.ui_call(self.main._finish_facebook_analysis, result.data)
             return
 
         # Check for specific extractor errors
@@ -1574,7 +1588,7 @@ class FacebookAnalysisTask:
                 self.logger.info(f"Retrying with canonical URL: {canonical_url}")
                 result = self._try_extraction(canonical_url)
                 if result.success:
-                    self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+                    self.main.ui_call(self.main._finish_facebook_analysis, result.data)
                     return
 
             # Attempt 3: Auto-update yt-dlp and retry
@@ -1588,22 +1602,22 @@ class FacebookAnalysisTask:
 
                 if update_result.success and update_result.updated:
                     self.logger.info("Retrying FB extraction after update...")
-                    self.main.progress_dialog.update_status("Update complete, retrying extraction...")
+                    self.main.ui_call(self.main.progress_dialog.update_status, "Update complete, retrying extraction...")
                     result = self._try_extraction(canonical_url or self.original_url)
                     if result.success:
-                        self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+                        self.main.ui_call(self.main._finish_facebook_analysis, result.data)
                         return
 
         # If all else fails, check for login error and prompt or show final error modal
         is_login_error = "login required" in result.error.lower() or "you must log in" in result.error.lower()
         if is_login_error:
             self.logger.info("Login error detected, prompting user for cookies.")
-            self.main.after(0, self._prompt_for_cookies)
+            self.main.ui_call(self._prompt_for_cookies)
         else:
             self.logger.error(f"All FB extraction attempts failed. Final error: {result.error}")
-            self.main.after(0, lambda: self.main._show_facebook_error_modal(self.original_url))
+            self.main.ui_call(self.main._show_facebook_error_modal, self.original_url)
             # Also update the main UI to show a generic failure
-            self.main.after(0, lambda: self.main._finish_facebook_analysis({'error': 'final_failure'}))
+            self.main.ui_call(self.main._finish_facebook_analysis, {'error': 'final_failure'})
 
 
     def _try_extraction(self, url: str, use_cookies: bool = False) -> 'ExtractionResult':
@@ -1625,7 +1639,7 @@ class FacebookAnalysisTask:
             # This needs to run in a new thread
             threading.Thread(target=self._retry_with_cookies, daemon=True).start()
         else:
-             self.main.after(0, lambda: self.main._finish_facebook_analysis({'error': 'user_declined_cookies'}))
+             self.main.ui_call(self.main._finish_facebook_analysis, {'error': 'user_declined_cookies'})
 
 
     def _retry_with_cookies(self):
@@ -1633,8 +1647,8 @@ class FacebookAnalysisTask:
         url_to_try = canonicalize_facebook_url(self.original_url) or self.original_url
         result = self._try_extraction(url_to_try, use_cookies=True)
         if result.success:
-            self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+            self.main.ui_call(self.main._finish_facebook_analysis, result.data)
         else:
             self.logger.error(f"FB extraction with cookies failed. Final error: {result.error}")
-            self.main.after(0, lambda: self.main._show_facebook_error_modal(self.original_url))
-            self.main.after(0, lambda: self.main._finish_facebook_analysis({'error': 'cookie_failure'}))
+            self.main.ui_call(self.main._show_facebook_error_modal, self.original_url)
+            self.main.ui_call(self.main._finish_facebook_analysis, {'error': 'cookie_failure'})

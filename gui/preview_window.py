@@ -13,10 +13,11 @@ class PreviewWindow(tk.Toplevel):
     A Toplevel window for previewing a video using an embedded webview.
     Includes controls for opening in browser, copying URL, and a status bar.
     """
-    def __init__(self, parent, url: str, title: str):
+    def __init__(self, parent, url: str, title: str, ui_call: callable):
         super().__init__(parent)
         self.url = url
         self.video_title = title
+        self.ui_call = ui_call
 
         self.title(f"Preview • {self.video_title[:50]}...")
         self.geometry("980x620")
@@ -79,10 +80,10 @@ class PreviewWindow(tk.Toplevel):
                 webview.create_window(self.title(), self.url, width=960, height=580)
                 webview.start(self._on_webview_error)
                 # When webview.start() finishes (window is closed), schedule Toplevel destruction.
-                self.after(0, self.destroy)
+                self.ui_call(self.destroy)
             except Exception as e:
-                self.after(0, lambda: self.status_label.config(text=f"Error: {e}"))
-                self.after(0, self._fallback_to_browser)
+                self.ui_call(self.status_label.config, text=f"Error: {e}")
+                self.ui_call(self._fallback_to_browser)
 
         # Start the webview in a daemon thread
         import threading
