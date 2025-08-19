@@ -3,7 +3,7 @@ Main application window and GUI controller (no presets, free-form Count)
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -24,6 +24,7 @@ from search.search_engine import SearchEngine
 from media.media_processor import MediaProcessor
 from analysis.video_analyzer import VideoAnalyzer
 from gui.tab_manager import TabManager
+from integrations.facebook_extractor import is_facebook_url, extract_facebook_metadata, download_facebook_video, normalize_facebook_url
 from gui.components import (
     ProgressDialog, CaptionDialog, TimerWidget, show_toast, ManualTranscriptDialog, FolderManagerDialog
 )
@@ -91,6 +92,11 @@ class MainWindow:
         self.status_job = None
         self.url_frame = None
         self.search_frame = None
+
+        # --- Facebook specific UI ---
+        self.facebook_options_frame = None
+        self.use_facebook_cookies_var = None
+        self.facebook_cookies_path_var = None
 
 
     # -----------------------------
@@ -232,33 +238,70 @@ class MainWindow:
     # Top: URL section
     # -----------------------------
     def _create_url_input(self):
-        self.url_frame = tk.Frame(self.root, bg=COLORS.get('bg_primary', '#16181d'))
-        self.url_frame.pack(fill='x', padx=10, pady=(8, 4))
+        # --- Main URL Frame ---
+        url_input_frame = tk.Frame(self.root, bg=COLORS.get('bg_primary', '#16181d'))
+        url_input_frame.pack(fill='x', padx=10, pady=(8, 0)) # Reduced bottom padding
 
-        self.url_label = tk.Label(self.url_frame, text='🔗 YouTube URL:', bg=COLORS.get('bg_primary', '#16181d'), fg=COLORS.get('fg_accent', '#fbbf24'))
+        self.url_label = tk.Label(url_input_frame, text='🔗 URL:', bg=COLORS.get('bg_primary', '#16181d'), fg=COLORS.get('fg_accent', '#fbbf24'))
         self.url_label.pack(side='left')
 
-        self.url_entry = tk.Entry(self.url_frame, width=60, bg=COLORS.get('bg_secondary', '#1f232a'), fg=COLORS.get('fg_primary', '#e6e6e6'), insertbackground=COLORS.get('fg_primary', '#e6e6e6'))
-        self.url_entry.pack(side='left', padx=8, ipady=4) # ipady to increase height
+        self.url_entry = tk.Entry(url_input_frame, width=60, bg=COLORS.get('bg_secondary', '#1f232a'), fg=COLORS.get('fg_primary', '#e6e6e6'), insertbackground=COLORS.get('fg_primary', '#e6e6e6'))
+        self.url_entry.pack(side='left', padx=8, ipady=4)
 
-        analyze_button = ttk.Button(self.url_frame, text='Analyze URL', command=self._analyze_url, style="Secondary.TButton")
+        analyze_button = ttk.Button(url_input_frame, text='Analyze URL', command=self._analyze_url, style="Secondary.TButton")
         analyze_button.pack(side='left', padx=6)
 
+        # --- Facebook Advanced Options (initially hidden) ---
+        self.facebook_options_frame = tk.Frame(self.root, bg=COLORS.get('bg_primary', '#16181d'))
+        # self.facebook_options_frame.pack(fill='x', padx=10, pady=(2, 4)) # Packed on demand
+
+        self.use_facebook_cookies_var = tk.BooleanVar(value=False)
+        self.facebook_cookies_path_var = tk.StringVar(value=settings_manager.get('facebook_cookies_path', ''))
+
+        fb_cookie_check = ttk.Checkbutton(self.facebook_options_frame, text="Use cookies for Facebook", variable=self.use_facebook_cookies_var)
+        fb_cookie_check.pack(side='left', padx=(60, 10))
+
+        fb_cookie_entry = tk.Entry(self.facebook_options_frame, textvariable=self.facebook_cookies_path_var, width=40, state='readonly', bg=COLORS.get('bg_secondary', '#1f232a'), fg=COLORS.get('fg_secondary', '#b7bdc6'))
+        fb_cookie_entry.pack(side='left', ipady=2)
+
+        def _browse_cookies():
+            filepath = filedialog.askopenfilename(
+                title="Select cookies.txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                initialdir=Path.home()
+            )
+            if filepath:
+                self.facebook_cookies_path_var.set(filepath)
+                settings_manager.set('facebook_cookies_path', filepath)
+
+        browse_btn = ttk.Button(self.facebook_options_frame, text='Browse...', command=_browse_cookies)
+        browse_btn.pack(side='left', padx=6)
+
         # --- URL Entry Behaviors ---
-        def _update_analyze_button_state(*args):
-            state = 'disabled' if not self.url_entry.get() else 'normal'
+        def _update_ui_on_key_release(*args):
+            url = self.url_entry.get()
+            state = 'disabled' if not url else 'normal'
             analyze_button.config(state=state)
 
-        self.url_entry.bind('<KeyRelease>', _update_analyze_button_state)
+            if is_facebook_url(url):
+                if not self.facebook_options_frame.winfo_ismapped():
+                    self.facebook_options_frame.pack(fill='x', padx=10, pady=(2, 4), before=self.search_frame)
+                self.url_label.config(text="🔗 FB URL:")
+            else:
+                if self.facebook_options_frame.winfo_ismapped():
+                    self.facebook_options_frame.pack_forget()
+                self.url_label.config(text="🔗 URL:")
+
+        self.url_entry.bind('<KeyRelease>', _update_ui_on_key_release)
         self.url_entry.bind('<Escape>', lambda e: self._clear_url())
 
         # Right-click menu
-        url_menu = tk.Menu(self.url_frame, tearoff=0)
+        url_menu = tk.Menu(self.root, tearoff=0)
         url_menu.add_command(label="Paste", command=lambda: self.url_entry.event_generate('<<Paste>>'))
         url_menu.add_command(label="Clear", command=self._clear_url)
         self.url_entry.bind("<Button-3>", lambda e: url_menu.tk_popup(e.x_root, e.y_root))
 
-        _update_analyze_button_state() # Set initial state
+        _update_ui_on_key_release() # Set initial state
 
         separator = tk.Frame(self.root, height=2, bg=COLORS.get('border', '#3a3a3a'))
         separator.pack(fill='x', padx=10, pady=(6, 8))
@@ -724,29 +767,85 @@ class MainWindow:
     def _analyze_url(self):
         url = self.url_entry.get().strip()
         if not url:
-            messagebox.showwarning('No URL', 'Please enter a YouTube URL!')
-            return
-        video_id = self._extract_video_id(url)
-        if not video_id:
-            messagebox.showerror('Invalid URL', 'Please enter a valid YouTube URL!')
+            messagebox.showwarning('No URL', 'Please enter a URL!')
             return
         if self.current_search_active:
             messagebox.showwarning('Analysis Active', 'An analysis is already in progress!')
             return
 
+        # --- Set up tab for analysis ---
         active_tab = self.tab_manager.get_active_tab()
-        if active_tab and (not active_tab.search_term or "URL:" not in active_tab.search_term):
+        if not active_tab or (active_tab.search_term and "URL:" not in active_tab.search_term):
+             active_tab = self.tab_manager.add_new_tab("URL Analysis")
+
+        self.tab_manager.clear_tab_results(active_tab.tab_id)
+
+        # --- Route to correct analyzer ---
+        if is_facebook_url(url):
+            normalized_url = normalize_facebook_url(url)
+            active_tab.search_term = f"URL: {normalized_url.split('?')[0][-20:]}"
+            active_tab.label.config(text=f"FB URL: ...{normalized_url[-20:]}")
+            self._perform_facebook_analysis(normalized_url)
+        else:
+            video_id = self._extract_video_id(url)
+            if not video_id:
+                messagebox.showerror('Invalid URL', 'Please enter a valid YouTube or Facebook URL!')
+                return
+
             active_tab.search_term = f"URL: {video_id}"
-            active_tab.label.config(text=f"URL: {video_id[:8]}...")
-        elif not active_tab:
-            self.tab_manager.add_new_tab(f"URL: {video_id}")
-            active_tab = self.tab_manager.get_active_tab()
-        if active_tab:
-            self.tab_manager.clear_tab_results(active_tab.tab_id)
+            active_tab.label.config(text=f"YT URL: {video_id}")
+            self._perform_youtube_analysis(video_id)
 
-        self._perform_url_analysis(video_id)
+    def _perform_facebook_analysis(self, url: str):
+        self.current_search_active = True
+        active_tab = self.tab_manager.get_active_tab()
+        if not active_tab:
+            self.current_search_active = False
+            return
 
-    def _perform_url_analysis(self, video_id: str):
+        self.tab_manager.update_tab_status(active_tab.tab_id, "Analyzing FB URL...", 'loading')
+        self.progress_dialog = ProgressDialog(self.root, "🔍 Analyzing Facebook URL")
+        self.progress_dialog.update_status("Fetching video data from Facebook...")
+
+        def _task():
+            cookies_path = self.facebook_cookies_path_var.get() if self.use_facebook_cookies_var.get() else None
+            metadata = extract_facebook_metadata(url, cookies_path)
+            self.root.after(0, lambda: self._finish_facebook_analysis(metadata))
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _finish_facebook_analysis(self, result):
+        self.current_search_active = False
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+
+        active_tab = self.tab_manager.get_active_tab()
+        if not active_tab: return
+
+        if 'error' in result:
+            error_type = result.get("error")
+            error_message = result.get("message", "Unknown error.")
+            self.logger.error(f"Facebook analysis error: {error_type} - {error_message}")
+            self.tab_manager.update_tab_status(active_tab.tab_id, "Error", 'error')
+            if error_type == "private_video":
+                messagebox.showerror("❌ Analysis Error", "This video is private. Please provide a cookies.txt file for access.")
+            else:
+                messagebox.showerror("❌ Analysis Error", f"Could not analyze Facebook URL: {error_type}")
+            return
+
+        video_entry = VideoAnalyzer.process_facebook_video_data(result)
+        if not video_entry:
+            self.tab_manager.update_tab_status(active_tab.tab_id, "Processing Error", 'error')
+            messagebox.showerror("❌ Analysis Error", "Failed to process the extracted Facebook video data.")
+            return
+
+        self.tab_manager.add_result_to_tab(active_tab.tab_id, video_entry)
+        video_title = video_entry.get('title', 'Unknown')[:30]
+        self.tab_manager.update_tab_status(active_tab.tab_id, f"✓ {video_title}...", 'complete')
+        messagebox.showinfo("✅ Analysis Complete", f"Successfully analyzed Facebook video:\n{video_title}")
+
+    def _perform_youtube_analysis(self, video_id: str):
         self.current_search_active = True
         active_tab = self.tab_manager.get_active_tab()
         if not active_tab:
@@ -759,22 +858,22 @@ class MainWindow:
 
             video_details_map = self.search_engine.api_client.get_video_details([video_id])
             if not video_details_map or video_id not in video_details_map:
-                self._finish_url_analysis([], error="Video not found or unavailable")
+                self._finish_youtube_analysis([], error="Video not found or unavailable")
                 return
 
             self.progress_dialog.update_status("Processing video data...")
             video_details = video_details_map[video_id]
             video_entry = VideoAnalyzer.process_video_data(video_details, video_id)
             if not video_entry:
-                self._finish_url_analysis([], error="Failed to process video data")
+                self._finish_youtube_analysis([], error="Failed to process video data")
                 return
 
-            self._finish_url_analysis([video_entry])
+            self._finish_youtube_analysis([video_entry])
         except Exception as e:
             self.logger.error(f"URL analysis error: {e}")
-            self._finish_url_analysis([], error=str(e))
+            self._finish_youtube_analysis([], error=str(e))
 
-    def _finish_url_analysis(self, results, error=None):
+    def _finish_youtube_analysis(self, results, error=None):
         self.current_search_active = False
         if self.progress_dialog:
             self.progress_dialog.close()
@@ -964,27 +1063,63 @@ class MainWindow:
             messagebox.showinfo('Download', 'Please select a video first.')
             return
         try:
-            video_id = video.get('video_id')
+            platform = video.get('platform', 'YouTube')
             title = video.get('title', 'Unknown')
-            url = f'https://www.youtube.com/watch?v={video_id}'
             query = self.query_entry.get().strip() or "default"
             output_path = self.media_processor.get_output_path(query)
-            success = self.media_processor.download_video(video_id, url, output_path)
-            if success:
-                messagebox.showinfo('Download', f'Download started!\nSaved to:\n{output_path}')
-                try: os.startfile(str(output_path))
-                except Exception: pass
-                try:
-                    clean_title = title.replace('🟢 ','').replace('🔴 ','').strip()
-                    caption, hashtags = VideoAnalyzer.generate_caption_and_hashtags(clean_title)
-                    CaptionDialog(self.root, clean_title, caption, hashtags, str(output_path))
-                except Exception as e:
-                    self.logger.error(f'Caption generation error: {e}')
-            else:
-                messagebox.showerror('Download Error', 'Failed to download video')
+
+            def on_complete(success):
+                if success:
+                    try:
+                        os.startfile(str(output_path))
+                        clean_title = title.replace('🟢 ','').replace('🔴 ','').strip()
+                        caption, hashtags = VideoAnalyzer.generate_caption_and_hashtags(clean_title)
+                        CaptionDialog(self.root, clean_title, caption, hashtags, str(output_path))
+                    except Exception as e:
+                        self.logger.error(f'Post-download caption error: {e}')
+                else:
+                    messagebox.showerror('Download Error', f'Failed to download "{title[:40]}...". Check logs.')
+
+            if platform == 'Facebook':
+                url = video.get('webpage_url')
+                cookies_path = self.facebook_cookies_path_var.get() if self.use_facebook_cookies_var.get() else None
+                self._execute_download(
+                    download_func=download_facebook_video,
+                    on_complete=on_complete,
+                    title=title,
+                    url=url,
+                    cookies_path=cookies_path,
+                    output_path=output_path
+                )
+            else: # YouTube
+                video_id = video.get('video_id')
+                url = f'https://www.youtube.com/watch?v={video_id}'
+                self._execute_download(
+                    download_func=self.media_processor.download_video,
+                    on_complete=on_complete,
+                    title=title,
+                    video_id=video_id,
+                    url=url,
+                    output_path=output_path
+                )
+
+            messagebox.showinfo('Download', f'Download started for "{title[:30]}..."!')
+
         except Exception as e:
             self.logger.error(f'Download error: {e}')
-            messagebox.showerror('Download Error', f'Error: {e}')
+            messagebox.showerror('Download Error', f'Error preparing download: {e}')
+
+    def _execute_download(self, download_func: Callable, on_complete: Callable, title: str, **kwargs):
+        """Executes a download function in a thread and calls back on completion."""
+        def _task():
+            try:
+                success = download_func(**kwargs)
+                self.root.after(0, lambda: on_complete(success))
+            except Exception as e:
+                self.logger.error(f"Exception during download execution for '{title}': {e}")
+                self.root.after(0, lambda: on_complete(False))
+
+        threading.Thread(target=_task, daemon=True).start()
 
     def _transcribe_video(self):
         video = self.tab_manager.get_selected_video()

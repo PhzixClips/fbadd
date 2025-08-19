@@ -149,6 +149,77 @@ class VideoAnalyzer:
         return 0.5
 
     @staticmethod
+    def process_facebook_video_data(data: Dict) -> Optional[Dict]:
+        """Processes the JSON output from yt-dlp for a Facebook video."""
+        try:
+            title = data.get('title', '')
+            if not VideoAnalyzer.is_english_content(title):
+                return None
+
+            # --- Basic Info ---
+            video_id = data.get('id')
+            if not video_id: return None
+
+            # --- Metrics ---
+            views = int(data.get('view_count', 0))
+            likes = int(data.get('like_count', 0))
+            comments = int(data.get('comment_count', 0))
+            like_view_ratio = round(likes / views, 4) if views > 0 else 0
+
+            # --- Age and VPH ---
+            upload_date_str = data.get('upload_date') # YYYYMMDD
+            age_hours = 0
+            age_str = "unknown"
+            if upload_date_str:
+                published_at = datetime.strptime(upload_date_str, '%Y%m%d')
+                age_delta = datetime.utcnow() - published_at
+                age_hours = age_delta.total_seconds() / 3600
+                age_days = age_delta.days
+                age_str = f"{age_days}d ago" if age_days > 0 else f"{int(age_hours)}h ago"
+
+            vph = round(views / age_hours, 2) if age_hours > 0 else 0
+
+            # --- Duration ---
+            duration_seconds = data.get('duration', 0)
+            minutes, seconds = divmod(int(duration_seconds), 60)
+            duration_str = f"{minutes:02d}:{seconds:02d}"
+
+            # --- Create Base Entry ---
+            video_entry = {
+                'platform': 'Facebook',
+                'title': title,
+                'video_id': video_id,
+                'uploader': data.get('uploader', 'Unknown'),
+                'views': views,
+                'likes': likes,
+                'comments': comments,
+                'ratio': like_view_ratio,
+                'vph': vph,
+                'duration': duration_str,
+                'age': age_str,
+                'description': data.get('description', ''),
+                'thumbnail': data.get('thumbnail'),
+                'webpage_url': data.get('webpage_url')
+            }
+
+            # --- Add Repost and Viral Score ---
+            is_repost, reason = VideoAnalyzer.detect_cross_platform_virality(
+                video_entry['title'], video_entry['description']
+            )
+            video_entry['repost_flag'] = is_repost
+            video_entry['repost_reason'] = reason
+
+            score, context = VideoAnalyzer.calculate_viral_score(video_entry)
+            video_entry['viral_score'] = round(score, 3)
+            video_entry['viral_context'] = context
+
+            return video_entry
+
+        except Exception as e:
+            log_upgrade(f"Error processing Facebook video data: {e}")
+            return None
+
+    @staticmethod
     def process_video_data(video_details: Dict, video_id: str) -> Optional[Dict]:
         """Process raw video data into structured format"""
         try:
