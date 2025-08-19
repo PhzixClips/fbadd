@@ -353,19 +353,25 @@ class MainWindow:
 
     def _on_tab_switch(self, tab_data: Optional[dict]):
         """Callback for when the active tab changes."""
+        # Guard clause to prevent crash on startup
+        url_frame = getattr(self, "url_frame", None)
+        search_frame = getattr(self, "search_frame", None)
+        if not all(frame and frame.winfo_exists() for frame in [url_frame, search_frame]):
+            return
+
         is_library_tab = tab_data and tab_data.is_winners_tab
 
         # Usingwinfo_ismapped() checks if the widget is currently visible
         if is_library_tab:
-            if self.url_frame.winfo_ismapped():
-                self.url_frame.pack_forget()
-            if self.search_frame.winfo_ismapped():
-                self.search_frame.pack_forget()
+            if url_frame.winfo_ismapped():
+                url_frame.pack_forget()
+            if search_frame.winfo_ismapped():
+                search_frame.pack_forget()
         else:
-            if not self.url_frame.winfo_ismapped():
-                self.url_frame.pack(fill='x', padx=10, pady=(8, 4), before=self.tree_container)
-            if not self.search_frame.winfo_ismapped():
-                self.search_frame.pack(fill='x', padx=10, pady=4, before=self.tree_container)
+            if not url_frame.winfo_ismapped():
+                url_frame.pack(fill='x', padx=10, pady=(8, 4), before=self.tree_container)
+            if not search_frame.winfo_ismapped():
+                search_frame.pack(fill='x', padx=10, pady=4, before=self.tree_container)
 
     # -----------------------------
     # Bottom action buttons
