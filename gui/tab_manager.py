@@ -381,6 +381,21 @@ class TabManager:
             tree.column(col, anchor='center', width=column_widths[col])
 
         tree.column('video_id', width=0, stretch=False)
+        tree.bind("<Double-1>", self.main_window._on_row_double_click)
+
+        # Context Menu for search results
+        context_menu = tk.Menu(tree, tearoff=0)
+        context_menu.add_command(label="Preview", command=self.main_window._on_row_double_click)
+        context_menu.add_command(label="Open in Browser", command=lambda: self.main_window._open_selected_in_browser())
+        context_menu.add_command(label="Copy URL", command=lambda: self.main_window._copy_selected_url())
+
+        def show_context_menu(event):
+            item = tree.identify_row(event.y)
+            if item:
+                tree.selection_set(item)
+                context_menu.post(event.x_root, event.y_root)
+
+        tree.bind("<Button-3>", show_context_menu)
         return tree
 
     def _create_winners_treeview(self, parent_container: tk.Widget) -> ttk.Treeview:
@@ -426,6 +441,8 @@ class TabManager:
 
         # Context Menu
         context_menu = tk.Menu(tree, tearoff=0)
+        context_menu.add_command(label="Preview Video", command=self.main_window._on_row_double_click)
+        context_menu.add_separator()
         context_menu.add_command(label="Open Transcript", command=self.main_window.open_transcript_for_selected)
         context_menu.add_command(label="Delete Transcript", command=self.main_window.delete_transcript_for_selected)
         context_menu.add_separator()
@@ -439,6 +456,7 @@ class TabManager:
 
         tree.bind("<Button-3>", show_context_menu)
         tree.bind("<<TreeviewSelect>>", self.main_window._on_winner_select)
+        tree.bind("<Double-1>", self.main_window._on_row_double_click)
         return tree
 
     def _bind_tab_events(self, tab_frame: tk.Frame, tab_label: tk.Label,

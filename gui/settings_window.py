@@ -70,6 +70,11 @@ class SettingsWindow(tk.Toplevel):
         scale_entry = ttk.Entry(frame, textvariable=self.vars['ui_scale'])
         scale_entry.grid(row=1, column=1, sticky='ew', padx=5)
 
+        # Preview setting
+        self.vars['preview_in_webview'] = tk.BooleanVar()
+        ttk.Checkbutton(frame, text="Open previews in embedded webview (recommended)",
+                        variable=self.vars['preview_in_webview']).grid(row=2, column=0, columnspan=2, sticky='w', pady=10)
+
         # Font Sizes
         ttk.Label(frame, text="Font Sizes:", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky='w', pady=10)
 
@@ -150,6 +155,7 @@ class SettingsWindow(tk.Toplevel):
         # Appearance
         self.vars['theme_name'].set(self.settings.get('theme_name'))
         self.vars['ui_scale'].set(self.settings.get('ui_scale'))
+        self.vars['preview_in_webview'].set(self.settings.get('preview_in_webview', True)) # Default to True
         for key, var in self.vars['font_sizes'].items():
             var.set(self.settings.get('font_sizes', {}).get(key))
 
@@ -165,11 +171,18 @@ class SettingsWindow(tk.Toplevel):
         for key, var in self.vars['viral_score_weights'].items():
             var.set(self.settings.get('viral_score_weights', {}).get(key))
 
+        # Library
+        self.vars['save_default_folder'].set(self.settings.get('save_default_folder'))
+        self.vars['save_remember_last_folder'].set(self.settings.get('save_remember_last_folder'))
+        self.vars['save_auto_download_transcript'].set(self.settings.get('save_auto_download_transcript'))
+        self.vars['save_auto_open_prompt_builder'].set(self.settings.get('save_auto_open_prompt_builder'))
+
     def _save_and_close(self):
         try:
             # Appearance
             settings_manager.set('theme_name', self.vars['theme_name'].get())
             settings_manager.set('ui_scale', self.vars['ui_scale'].get())
+            settings_manager.set('preview_in_webview', self.vars['preview_in_webview'].get())
             font_sizes = {key: var.get() for key, var in self.vars['font_sizes'].items()}
             settings_manager.set('font_sizes', font_sizes)
 
@@ -225,31 +238,6 @@ class SettingsWindow(tk.Toplevel):
         ttk.Checkbutton(frame, text="Auto-open Prompt Builder after save", variable=self.vars['save_auto_open_prompt_builder']).grid(row=4, column=0, columnspan=2, sticky='w', pady=5)
 
         return frame
-
-    def _load_settings(self):
-        # Appearance
-        self.vars['theme_name'].set(self.settings.get('theme_name'))
-        self.vars['ui_scale'].set(self.settings.get('ui_scale'))
-        for key, var in self.vars['font_sizes'].items():
-            var.set(self.settings.get('font_sizes', {}).get(key))
-
-        # Paths & API
-        self.api_keys_text.insert('1.0', "\n".join(self.settings.get('api_keys', [])))
-        self.vars['yt_dlp_path'].set(self.settings.get('yt_dlp_path'))
-        self.vars['ffmpeg_path'].set(self.settings.get('ffmpeg_path'))
-        self.vars['cliphustle_base_path'].set(self.settings.get('cliphustle_base_path'))
-
-        # Search & Analysis
-        self.vars['max_api_calls'].set(self.settings.get('max_api_calls'))
-        self.vars['default_search_count'].set(self.settings.get('default_search_count'))
-        for key, var in self.vars['viral_score_weights'].items():
-            var.set(self.settings.get('viral_score_weights', {}).get(key))
-
-        # Library
-        self.vars['save_default_folder'].set(self.settings.get('save_default_folder'))
-        self.vars['save_remember_last_folder'].set(self.settings.get('save_remember_last_folder'))
-        self.vars['save_auto_download_transcript'].set(self.settings.get('save_auto_download_transcript'))
-        self.vars['save_auto_open_prompt_builder'].set(self.settings.get('save_auto_open_prompt_builder'))
 
     def _save_and_close(self):
         try:

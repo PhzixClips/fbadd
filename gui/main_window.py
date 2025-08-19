@@ -24,11 +24,13 @@ from search.search_engine import SearchEngine
 from media.media_processor import MediaProcessor
 from analysis.video_analyzer import VideoAnalyzer
 from gui.tab_manager import TabManager
+import webbrowser
 from integrations.facebook_extractor import is_facebook_url, extract_facebook_metadata, download_facebook_video, normalize_facebook_url
 from gui.components import (
     ProgressDialog, CaptionDialog, TimerWidget, show_toast, ManualTranscriptDialog, FolderManagerDialog
 )
 from gui.transcript_prompter import TranscriptDialog
+from gui.preview_window import PreviewWindow
 from utils.logging import Logger
 
 from data.transcripts_manager import TranscriptsManager
@@ -1059,19 +1061,90 @@ class MainWindow:
                       else timedelta(0))
 
     def _preview_video(self):
+        # This method is now deprecated in favor of _show_preview
+        # but is kept for the old button binding.
+        self._show_preview()
+
+    def _on_row_double_click(self, event):
+        """Event handler for double-clicking a row in any results tree."""
+        # The event is passed but not used, as we operate on the selected item.
+        self._show_preview()
+
+    def _show_preview(self):
+        """Shows a preview for the selected video."""
         video = self.tab_manager.get_selected_video()
         if not video:
-            messagebox.showinfo('Preview', 'Please select a video first.')
+            messagebox.showinfo('Preview', 'Please select a video to preview.')
             return
-        video_id = video.get('video_id')
-        if video_id:
-            url = f'https://www.youtube.com/embed/{video_id}'
-            try:
-                webview.create_window('Preview', url, width=800, height=450)
-                webview.start()
-            except Exception as e:
-                self.logger.error(f"Preview error: {e}")
-                messagebox.showerror('Preview Error', f'Could not open preview: {e}')
+
+        platform = video.get('platform', 'YouTube')
+        url = video.get('webpage_url')
+        if not url:
+            if platform == 'YouTube':
+                video_id = video.get('video_id')
+                url = f'https://www.youtube.com/watch?v={video_id}'
+            else:
+                messagebox.showerror('Preview Error', 'No URL found for this item.')
+                return
+
+        title = video.get('title', 'Untitled')
+
+        self.logger.debug(f"Preview requested for url={url}")
+
+        use_webview = settings_manager.get('preview_in_webview', True)
+
+        if use_webview:
+            PreviewWindow(self.root, url, title)
+        else:
+            self._open_url_in_browser(url)
+
+    def _open_selected_in_browser(self):
+        """Context menu action to open the selected video in the browser."""
+        video = self.tab_manager.get_selected_video()
+        if not video:
+            return
+
+        platform = video.get('platform', 'YouTube')
+        url = video.get('webpage_url')
+        if not url:
+            if platform == 'YouTube':
+                video_id = video.get('video_id')
+                url = f'https://www.youtube.com/watch?v={video_id}'
+            else:
+                return
+
+        self._open_url_in_browser(url)
+
+    def _open_url_in_browser(self, url: str):
+        """Opens a given URL in the default system browser."""
+        try:
+            self.logger.debug(f"Opening URL in browser: {url}")
+            webbrowser.open(url)
+        except Exception as e:
+            self.logger.error(f"Failed to open URL in browser: {e}")
+            messagebox.showerror("Error", f"Could not open URL in browser:\n{e}")
+
+    def _copy_selected_url(self):
+        """Context menu action to copy the selected video's URL."""
+        video = self.tab_manager.get_selected_video()
+        if not video:
+            return
+
+        platform = video.get('platform', 'YouTube')
+        url = video.get('webpage_url')
+        if not url:
+            if platform == 'YouTube':
+                video_id = video.get('video_id')
+                url = f'https://www.youtube.com/watch?v={video_id}'
+            else:
+                self.root.clipboard_clear()
+                self.root.clipboard_append("No URL available")
+                show_toast(self.root, "No URL available for this item.")
+                return
+
+        self.root.clipboard_clear()
+        self.root.clipboard_append(url)
+        show_toast(self.root, "URL copied to clipboard!")
 
     def _download_video(self):
         video = self.tab_manager.get_selected_video()
