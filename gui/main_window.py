@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import webview
-from typing import Optional
+from typing import Optional, Callable
 import threading
 import uuid
 
