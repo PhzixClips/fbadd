@@ -791,7 +791,8 @@ class MainWindow:
              messagebox.showerror("Error", "Could not determine active tab.")
              return
 
-        self.logger.debug("Analyze URL: resolved active tab id=%s", tab_id)
+        # Use f-string for logging, as the custom logger doesn't support printf-style args.
+        self.logger.debug(f"Analyze URL: resolved active tab id={tab_id}")
         self.tab_manager.clear_tab_results(tab_id)
 
         # --- Route to correct analyzer ---
