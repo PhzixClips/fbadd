@@ -25,7 +25,10 @@ from media.media_processor import MediaProcessor
 from analysis.video_analyzer import VideoAnalyzer
 from gui.tab_manager import TabManager
 import webbrowser
-from integrations.facebook_extractor import is_facebook_url, extract_facebook_metadata, download_facebook_video, normalize_facebook_url
+import webbrowser
+from integrations.facebook_extractor import is_facebook_url, download_facebook_video, normalize_facebook_url
+from integrations.facebook_helper import canonicalize_facebook_url
+from core.yt_dlp_helper import run_metadata_dump, update_yt_dlp
 from gui.components import (
     ProgressDialog, CaptionDialog, TimerWidget, show_toast, ManualTranscriptDialog, FolderManagerDialog
 )
@@ -70,6 +73,7 @@ class MainWindow:
 
         # Search state
         self.current_search_active = False
+        self.yt_dlp_updated_this_session = False
 
         # --- Widget references for dynamic updates ---
         self.url_label = None
@@ -822,14 +826,11 @@ class MainWindow:
 
         self.tab_manager.update_tab_status(tab_id, "Analyzing FB URL...", 'loading')
         self.progress_dialog = ProgressDialog(self.root, "🔍 Analyzing Facebook URL")
-        self.progress_dialog.update_status("Fetching video data from Facebook...")
+        self.progress_dialog.update_status("Starting Facebook analysis...")
 
-        def _task():
-            cookies_path = self.facebook_cookies_path_var.get() if self.use_facebook_cookies_var.get() else None
-            metadata = extract_facebook_metadata(url, cookies_path)
-            self.root.after(0, lambda: self._finish_facebook_analysis(metadata))
-
-        threading.Thread(target=_task, daemon=True).start()
+        # Create and run the analysis task in a separate thread
+        task = FacebookAnalysisTask(self, url)
+        threading.Thread(target=task.run, daemon=True).start()
 
     def _finish_facebook_analysis(self, result):
         self.current_search_active = False
@@ -1492,3 +1493,148 @@ class MainWindow:
     def _manage_folders(self):
         FolderManagerDialog(self.root, self.winners_manager)
         self.tab_manager.update_folder_filter()
+
+    def _show_facebook_error_modal(self, url: str):
+        """Shows a friendly modal when Facebook extraction fails definitively."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Facebook Extraction Failed")
+        dialog.geometry("450x200")
+        dialog.configure(bg=COLORS.get('bg_primary'))
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        main_frame = tk.Frame(dialog, bg=COLORS.get('bg_primary'), padx=15, pady=15)
+        main_frame.pack(fill='both', expand=True)
+
+        tk.Label(main_frame, text="Facebook changed their API and yt-dlp hasn't shipped a fix yet.",
+                  fg=COLORS.get('fg_primary'), bg=COLORS.get('bg_primary')).pack(pady=5)
+
+        version = settings_manager.get('yt_dlp_current_version', 'N/A')
+        last_update = settings_manager.get('yt_dlp_last_update_check', 'Never')
+        if last_update != 'Never':
+            try:
+                last_update = datetime.fromisoformat(last_update).strftime('%Y-%m-%d %H:%M')
+            except:
+                pass # keep as is
+
+        tk.Label(main_frame, text=f"yt-dlp version: {version} (Last check: {last_update})",
+                  fg=COLORS.get('fg_secondary'), bg=COLORS.get('bg_primary')).pack(pady=5)
+
+        button_frame = tk.Frame(main_frame, bg=COLORS.get('bg_primary'))
+        button_frame.pack(pady=15)
+
+        def _open_and_close():
+            webbrowser.open(url)
+            dialog.destroy()
+
+        def _update_and_close():
+            self._perform_facebook_analysis(url) # Re-trigger the whole flow
+            dialog.destroy()
+
+        def _learn_more():
+            webbrowser.open("https://github.com/yt-dlp/yt-dlp/issues?q=is%3Aissue+is%3Aopen+facebook")
+            dialog.destroy()
+
+        ttk.Button(button_frame, text="Open in Browser", command=_open_and_close).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Update yt-dlp & Retry", command=_update_and_close).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Learn More", command=_learn_more).pack(side='left', padx=5)
+
+
+class FacebookAnalysisTask:
+    """
+    Manages the complex, multi-step process of analyzing a Facebook URL,
+    including retries, updates, and user prompts.
+    """
+    def __init__(self, main_window: 'MainWindow', url: str):
+        self.main = main_window
+        self.logger = main_window.logger
+        self.original_url = url
+        self.tab_id = main_window.tab_manager.get_active_tab_id()
+
+    def run(self):
+        """Executes the analysis task. Designed to be run in a thread."""
+        self.logger.info(f"Starting Facebook analysis for URL: {self.original_url}")
+
+        # Attempt 1: Try the original URL
+        result = self._try_extraction(self.original_url)
+
+        if result.success:
+            self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+            return
+
+        # Check for specific extractor errors
+        is_extractor_error = "extractorerror" in result.error.lower() or "cannot parse data" in result.error.lower()
+
+        if is_extractor_error:
+            self.logger.warning(f"FB extractor error detected: {result.error[:100]}")
+
+            # Attempt 2: Try canonical URLs
+            canonical_url = canonicalize_facebook_url(self.original_url)
+            if canonical_url and canonical_url != self.original_url:
+                self.logger.info(f"Retrying with canonical URL: {canonical_url}")
+                result = self._try_extraction(canonical_url)
+                if result.success:
+                    self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+                    return
+
+            # Attempt 3: Auto-update yt-dlp and retry
+            if settings_manager.get('yt_dlp_auto_update', True) and not self.main.yt_dlp_updated_this_session:
+                self.main.yt_dlp_updated_this_session = True # Prevent multiple updates
+                self.logger.info("Attempting yt-dlp self-update...")
+                self.main.progress_dialog.update_status("FB extractor error, updating yt-dlp...")
+
+                update_result = update_yt_dlp()
+                self.logger.info(f"yt-dlp update result: success={update_result.success}, updated={update_result.updated}, msg={update_result.message}")
+
+                if update_result.success and update_result.updated:
+                    self.logger.info("Retrying FB extraction after update...")
+                    self.main.progress_dialog.update_status("Update complete, retrying extraction...")
+                    result = self._try_extraction(canonical_url or self.original_url)
+                    if result.success:
+                        self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+                        return
+
+        # If all else fails, check for login error and prompt or show final error modal
+        is_login_error = "login required" in result.error.lower() or "you must log in" in result.error.lower()
+        if is_login_error:
+            self.logger.info("Login error detected, prompting user for cookies.")
+            self.main.after(0, self._prompt_for_cookies)
+        else:
+            self.logger.error(f"All FB extraction attempts failed. Final error: {result.error}")
+            self.main.after(0, lambda: self.main._show_facebook_error_modal(self.original_url))
+            # Also update the main UI to show a generic failure
+            self.main.after(0, lambda: self.main._finish_facebook_analysis({'error': 'final_failure'}))
+
+
+    def _try_extraction(self, url: str, use_cookies: bool = False) -> 'ExtractionResult':
+        """A single attempt to extract metadata for a given URL."""
+        cookies_path = self.main.facebook_cookies_path_var.get() if use_cookies else None
+        extra_args = ["--extractor-args", "facebook:lang=en_US"]
+        return run_metadata_dump(url, cookies=cookies_path, extra_args=extra_args)
+
+    def _prompt_for_cookies(self):
+        """Show a messagebox on the main thread to ask about using cookies."""
+        should_retry = messagebox.askyesno(
+            "Login Required",
+            "This video seems to be private or requires a login.\n\n"
+            "Would you like to retry using your Facebook cookies.txt file?",
+            parent=self.main.root
+        )
+        if should_retry:
+            self.logger.info("User opted to retry with cookies.")
+            # This needs to run in a new thread
+            threading.Thread(target=self._retry_with_cookies, daemon=True).start()
+        else:
+             self.main.after(0, lambda: self.main._finish_facebook_analysis({'error': 'user_declined_cookies'}))
+
+
+    def _retry_with_cookies(self):
+        """Final attempt to extract metadata using cookies."""
+        url_to_try = canonicalize_facebook_url(self.original_url) or self.original_url
+        result = self._try_extraction(url_to_try, use_cookies=True)
+        if result.success:
+            self.main.after(0, lambda: self.main._finish_facebook_analysis(result.data))
+        else:
+            self.logger.error(f"FB extraction with cookies failed. Final error: {result.error}")
+            self.main.after(0, lambda: self.main._show_facebook_error_modal(self.original_url))
+            self.main.after(0, lambda: self.main._finish_facebook_analysis({'error': 'cookie_failure'}))

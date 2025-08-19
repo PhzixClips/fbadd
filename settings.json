@@ -6,6 +6,9 @@
         "AIzaSyCBlmnUspk4fp6nT81gJbcSz6SnMwPSkmQ"
     ],
     "yt_dlp_path": "C:\\yt-dlp\\yt-dlp.exe",
+    "yt_dlp_auto_update": true,
+    "yt_dlp_current_version": "",
+    "yt_dlp_last_update_check": "",
     "ffmpeg_path": "ffmpeg",
     "log_path": "/home/jules/OneDrive/Desktop/upgrade_log.txt",
     "audio_clips_path": "/home/jules/OneDrive/Desktop/audio_clips",

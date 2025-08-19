@@ -7,6 +7,9 @@ Provides a user interface for modifying application settings.
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from data.settings_manager import settings_manager
+from core.yt_dlp_helper import get_yt_dlp_version, update_yt_dlp
+import threading
+from datetime import datetime
 
 class SettingsWindow(tk.Toplevel):
     """
@@ -122,7 +125,53 @@ class SettingsWindow(tk.Toplevel):
             ttk.Button(frame, text="Browse...", command=lambda k=key: command(k)).grid(row=row, column=2, padx=5)
             row += 1
 
+        # yt-dlp Management Section
+        ttk.Separator(frame, orient='horizontal').grid(row=row, column=0, columnspan=3, sticky='ew', pady=15)
+        row += 1
+
+        ttk.Label(frame, text="yt-dlp Management", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky='w', pady=5)
+        row += 1
+
+        self.vars['yt_dlp_auto_update'] = tk.BooleanVar()
+        ttk.Checkbutton(frame, text="Auto-update yt-dlp on extractor errors (recommended)",
+                        variable=self.vars['yt_dlp_auto_update']).grid(row=row, column=0, columnspan=2, sticky='w', pady=5)
+        row += 1
+
+        self.yt_dlp_version_label = ttk.Label(frame, text="Installed yt-dlp version: ...")
+        self.yt_dlp_version_label.grid(row=row, column=0, columnspan=2, sticky='w', pady=2)
+        row += 1
+
+        self.yt_dlp_last_check_label = ttk.Label(frame, text="Last update check: ...")
+        self.yt_dlp_last_check_label.grid(row=row, column=0, columnspan=2, sticky='w', pady=2)
+        row += 1
+
+        self.update_button = ttk.Button(frame, text="Check for Updates", command=self._check_for_yt_dlp_updates)
+        self.update_button.grid(row=row, column=0, pady=10)
+
         return frame
+
+    def _check_for_yt_dlp_updates(self):
+        """Handles the 'Check for Updates' button click."""
+        self.update_button.config(state='disabled', text="Checking...")
+
+        def _task():
+            result = update_yt_dlp()
+            self.after(0, lambda: self._on_update_complete(result))
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _on_update_complete(self, result):
+        """Callback executed on the main thread after the update task finishes."""
+        self.update_button.config(state='normal', text="Check for Updates")
+
+        if result.success:
+            messagebox.showinfo("yt-dlp Update", result.message, parent=self)
+            # Refresh version info after update
+            self._update_version_labels()
+            settings_manager.set('yt_dlp_last_update_check', datetime.now().isoformat())
+            self.yt_dlp_last_check_label.config(text=f"Last update check: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        else:
+            messagebox.showerror("yt-dlp Update Failed", result.message, parent=self)
 
     def _create_search_tab(self, parent):
         frame = ttk.Frame(parent, padding=10)
@@ -151,7 +200,30 @@ class SettingsWindow(tk.Toplevel):
 
         return frame
 
+    def _update_version_labels(self):
+        """Fetches and displays the yt-dlp version info."""
+        def _task():
+            version = get_yt_dlp_version() or "Not found"
+            last_check = self.settings.get('yt_dlp_last_update_check')
+
+            if last_check:
+                try:
+                    last_check_dt = datetime.fromisoformat(last_check)
+                    last_check_str = last_check_dt.strftime('%Y-%m-%d %H:%M')
+                except ValueError:
+                    last_check_str = "Never"
+            else:
+                last_check_str = "Never"
+
+            self.after(0, lambda: self.yt_dlp_version_label.config(text=f"Installed yt-dlp version: {version}"))
+            self.after(0, lambda: self.yt_dlp_last_check_label.config(text=f"Last update check: {last_check_str}"))
+            if version != "Not found":
+                settings_manager.set('yt_dlp_current_version', version)
+
+        threading.Thread(target=_task, daemon=True).start()
+
     def _load_settings(self):
+        self._update_version_labels() # Fetch version info
         # Appearance
         self.vars['theme_name'].set(self.settings.get('theme_name'))
         self.vars['ui_scale'].set(self.settings.get('ui_scale'))
@@ -160,6 +232,7 @@ class SettingsWindow(tk.Toplevel):
             var.set(self.settings.get('font_sizes', {}).get(key))
 
         # Paths & API
+        self.vars['yt_dlp_auto_update'].set(self.settings.get('yt_dlp_auto_update', True))
         self.api_keys_text.insert('1.0', "\n".join(self.settings.get('api_keys', [])))
         self.vars['yt_dlp_path'].set(self.settings.get('yt_dlp_path'))
         self.vars['ffmpeg_path'].set(self.settings.get('ffmpeg_path'))
@@ -187,6 +260,7 @@ class SettingsWindow(tk.Toplevel):
             settings_manager.set('font_sizes', font_sizes)
 
             # Paths & API
+            settings_manager.set('yt_dlp_auto_update', self.vars['yt_dlp_auto_update'].get())
             api_keys = self.api_keys_text.get('1.0', tk.END).strip().split('\n')
             settings_manager.set('api_keys', [key for key in api_keys if key])
             settings_manager.set('yt_dlp_path', self.vars['yt_dlp_path'].get())
