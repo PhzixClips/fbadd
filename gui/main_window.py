@@ -780,17 +780,25 @@ class MainWindow:
             return
 
         # --- Set up tab for analysis ---
-        active_tab = self.tab_manager.get_active_tab()
-        if not active_tab or (active_tab.search_term and "URL:" not in active_tab.search_term):
-             active_tab = self.tab_manager.add_new_tab("URL Analysis")
+        active_tab_obj = self.tab_manager.get_active_tab()
+        if not active_tab_obj or (active_tab_obj.search_term and "URL:" not in active_tab_obj.search_term):
+             tab_id = self.tab_manager.add_new_tab("URL Analysis")
+             active_tab_obj = self.tab_manager.get_active_tab() # Re-fetch the new tab object
+        else:
+             tab_id = self.tab_manager.get_active_tab_id()
 
-        self.tab_manager.clear_tab_results(active_tab.tab_id)
+        if not tab_id or not active_tab_obj:
+             messagebox.showerror("Error", "Could not determine active tab.")
+             return
+
+        self.logger.debug("Analyze URL: resolved active tab id=%s", tab_id)
+        self.tab_manager.clear_tab_results(tab_id)
 
         # --- Route to correct analyzer ---
         if is_facebook_url(url):
             normalized_url = normalize_facebook_url(url)
-            active_tab.search_term = f"URL: {normalized_url.split('?')[0][-20:]}"
-            active_tab.label.config(text=f"FB URL: ...{normalized_url[-20:]}")
+            active_tab_obj.search_term = f"URL: {normalized_url.split('?')[0][-20:]}"
+            active_tab_obj.label.config(text=f"FB URL: ...{normalized_url[-20:]}")
             self._perform_facebook_analysis(normalized_url)
         else:
             video_id = self._extract_video_id(url)
@@ -798,18 +806,18 @@ class MainWindow:
                 messagebox.showerror('Invalid URL', 'Please enter a valid YouTube or Facebook URL!')
                 return
 
-            active_tab.search_term = f"URL: {video_id}"
-            active_tab.label.config(text=f"YT URL: {video_id}")
+            active_tab_obj.search_term = f"URL: {video_id}"
+            active_tab_obj.label.config(text=f"YT URL: {video_id}")
             self._perform_youtube_analysis(video_id)
 
     def _perform_facebook_analysis(self, url: str):
         self.current_search_active = True
-        active_tab = self.tab_manager.get_active_tab()
-        if not active_tab:
+        tab_id = self.tab_manager.get_active_tab_id()
+        if not tab_id:
             self.current_search_active = False
             return
 
-        self.tab_manager.update_tab_status(active_tab.tab_id, "Analyzing FB URL...", 'loading')
+        self.tab_manager.update_tab_status(tab_id, "Analyzing FB URL...", 'loading')
         self.progress_dialog = ProgressDialog(self.root, "🔍 Analyzing Facebook URL")
         self.progress_dialog.update_status("Fetching video data from Facebook...")
 
@@ -826,14 +834,14 @@ class MainWindow:
             self.progress_dialog.close()
             self.progress_dialog = None
 
-        active_tab = self.tab_manager.get_active_tab()
-        if not active_tab: return
+        tab_id = self.tab_manager.get_active_tab_id()
+        if not tab_id: return
 
         if 'error' in result:
             error_type = result.get("error")
             error_message = result.get("message", "Unknown error.")
             self.logger.error(f"Facebook analysis error: {error_type} - {error_message}")
-            self.tab_manager.update_tab_status(active_tab.tab_id, "Error", 'error')
+            self.tab_manager.update_tab_status(tab_id, "Error", 'error')
             if error_type == "private_video":
                 messagebox.showerror("❌ Analysis Error", "This video is private. Please provide a cookies.txt file for access.")
             else:
@@ -842,23 +850,23 @@ class MainWindow:
 
         video_entry = VideoAnalyzer.process_facebook_video_data(result)
         if not video_entry:
-            self.tab_manager.update_tab_status(active_tab.tab_id, "Processing Error", 'error')
+            self.tab_manager.update_tab_status(tab_id, "Processing Error", 'error')
             messagebox.showerror("❌ Analysis Error", "Failed to process the extracted Facebook video data.")
             return
 
-        self.tab_manager.add_result_to_tab(active_tab.tab_id, video_entry)
+        self.tab_manager.add_result_to_tab(tab_id, video_entry)
         video_title = video_entry.get('title', 'Unknown')[:30]
-        self.tab_manager.update_tab_status(active_tab.tab_id, f"✓ {video_title}...", 'complete')
+        self.tab_manager.update_tab_status(tab_id, f"✓ {video_title}...", 'complete')
         messagebox.showinfo("✅ Analysis Complete", f"Successfully analyzed Facebook video:\n{video_title}")
 
     def _perform_youtube_analysis(self, video_id: str):
         self.current_search_active = True
-        active_tab = self.tab_manager.get_active_tab()
-        if not active_tab:
+        tab_id = self.tab_manager.get_active_tab_id()
+        if not tab_id:
             self.current_search_active = False
             return
         try:
-            self.tab_manager.update_tab_status(active_tab.tab_id, "Analyzing URL...", 'loading')
+            self.tab_manager.update_tab_status(tab_id, "Analyzing URL...", 'loading')
             self.progress_dialog = ProgressDialog(self.root, "🔍 Analyzing YouTube URL")
             self.progress_dialog.update_status("Fetching video data...")
 
@@ -885,30 +893,30 @@ class MainWindow:
             self.progress_dialog.close()
             self.progress_dialog = None
 
-        active_tab = self.tab_manager.get_active_tab()
-        if not active_tab: return
+        tab_id = self.tab_manager.get_active_tab_id()
+        if not tab_id: return
 
         try:
             if error:
-                self.tab_manager.update_tab_status(active_tab.tab_id, "Error", 'error')
+                self.tab_manager.update_tab_status(tab_id, "Error", 'error')
                 messagebox.showerror("❌ Analysis Error", f"Error analyzing URL: {error}")
                 return
 
             for video in results:
-                self.tab_manager.add_result_to_tab(active_tab.tab_id, video)
+                self.tab_manager.add_result_to_tab(tab_id, video)
 
             if results:
                 video_title = results[0].get('title', 'Unknown')[:30]
-                self.tab_manager.update_tab_status(active_tab.tab_id, f"✓ {video_title}...", 'complete')
+                self.tab_manager.update_tab_status(tab_id, f"✓ {video_title}...", 'complete')
                 messagebox.showinfo("✅ Analysis Complete", f"Successfully analyzed video:\n{video_title}")
             else:
-                self.tab_manager.update_tab_status(active_tab.tab_id, "No data", 'error')
+                self.tab_manager.update_tab_status(tab_id, "No data", 'error')
                 messagebox.showwarning("⚠️ No Data", "No video data found")
 
             self.tab_counter_label.config(text=f"Tabs: {self.tab_manager.get_tab_count()}")
         except Exception as e:
             self.logger.error(f"Error finishing URL analysis: {e}")
-            self.tab_manager.update_tab_status(active_tab.tab_id, "Error", 'error')
+            self.tab_manager.update_tab_status(tab_id, "Error", 'error')
 
     def _start_search(self):
         if self.current_search_active:
@@ -920,15 +928,16 @@ class MainWindow:
             messagebox.showwarning('No Query', 'Please enter a search query!')
             return
 
-        active_tab = self.tab_manager.get_active_tab()
-        if active_tab and (not active_tab.search_term or active_tab.search_term != query):
-            active_tab.search_term = query
-            active_tab.label.config(text=query[:15] + "..." if len(query) > 15 else query)
-        elif not active_tab:
-            self.tab_manager.add_new_tab(query)
-            active_tab = self.tab_manager.get_active_tab()
-        if active_tab:
-            self.tab_manager.clear_tab_results(active_tab.tab_id)
+        active_tab_obj = self.tab_manager.get_active_tab()
+        if active_tab_obj and (not active_tab_obj.search_term or active_tab_obj.search_term != query):
+            active_tab_obj.search_term = query
+            active_tab_obj.label.config(text=query[:15] + "..." if len(query) > 15 else query)
+            tab_id = self.tab_manager.get_active_tab_id()
+        else:
+            tab_id = self.tab_manager.add_new_tab(query)
+
+        if tab_id:
+            self.tab_manager.clear_tab_results(tab_id)
 
         self._perform_search(query)
 

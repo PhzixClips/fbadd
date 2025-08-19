@@ -593,6 +593,10 @@ class TabManager:
             return self.tabs[self.active_tab_id]
         return None
 
+    def get_active_tab_id(self) -> Optional[str]:
+        """Safely returns the ID of the currently active tab."""
+        return self.active_tab_id
+
     def get_winners_tab(self) -> Optional[TabData]:
         if self.winners_tab_id and self.winners_tab_id in self.tabs:
             return self.tabs[self.winners_tab_id]
